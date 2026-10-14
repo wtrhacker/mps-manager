@@ -7,7 +7,7 @@ description = "Persistent script queues, NVIDIA MPS lifecycle, and an attachable
 license = "MIT"
 
 [dependencies]
-scientific-workflow = { path = "../../scientific-workflow/rust", features = ["external-tools"] }
+scientific-workflow = { git = "https://github.com/wtrhacker/Scientific-Workflow", rev = "a426683b44e3106374f159ecd15d4ca666642cfd", features = ["external-tools"] }
 crossterm = "0.29"
 libc = "0.2"
 ratatui = { version = "0.30.2", default-features = false, features = ["crossterm_0_29"] }

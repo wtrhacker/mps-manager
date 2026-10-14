@@ -13,19 +13,8 @@ jobs:
     strategy:
       matrix:
         python: ["3.10", "3.12"]
-    defaults:
-      run:
-        working-directory: mps-manager
     steps:
       - uses: actions/checkout@v4
-        with:
-          path: mps-manager
-      # Publish the fork feature commit before enabling this repository's CI.
-      - uses: actions/checkout@v4
-        with:
-          repository: wtrhacker/Scientific-Workflow
-          ref: a426683b44e3106374f159ecd15d4ca666642cfd
-          path: scientific-workflow
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: 1.97.0
@@ -47,4 +36,4 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: mps-manager-linux-python-${{ matrix.python }}
-          path: mps-manager/dist/*.whl
+          path: dist/*.whl

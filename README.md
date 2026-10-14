@@ -1,223 +1,134 @@
 # MPS Manager
 
-Run independent Python scripts on one NVIDIA GPU. Keep a large editable queue,
-add work from another Python program, and manage titled parent queues in a terminal.
-Scripts keep ownership of their science, arguments, outputs, and checkpoints.
-There are no automatic retries or analysis features in this interface.
+Run independent Python scripts together on one NVIDIA GPU. Give each queue a
+title, submit as many jobs as you need, and manage them from your terminal.
+Each job can use a different script, arguments, environment, and working directory.
 
-The Python client requires Python 3.10+ and Linux. Installed wheels bundle the
-native queue manager and have no Python runtime dependencies. The existing
-Workflow Python reader/conversion companion is not required. MPS mode requires
-NVIDIA's `nvidia-smi`, `nvidia-cuda-mps-control`, a Volta-or-newer GPU, and a
-driver supporting client termination (470+). The manager uses MPS protocol 2.
+## Install
 
-## Submit scripts
+Requires Linux, Python 3.10+, and an NVIDIA GPU/driver with working MPS client
+termination support (`nvidia-smi` and `nvidia-cuda-mps-control` installed).
+The prebuilt wheel supports Linux x86_64 with glibc 2.34+:
 
-Any filename can contain these calls:
+```bash
+python -m pip install https://github.com/wtrhacker/mps-manager/releases/download/v0.1.0/mps_manager-0.1.0-py3-none-linux_x86_64.whl
+```
+
+Installation provides both the `mps_runner` Python package and the `mps-manager`
+command in your active Python environment.
+
+To install from source instead, with Rust 1.97+ available:
+
+```bash
+python -m pip install git+https://github.com/wtrhacker/mps-manager.git
+```
+
+## Start a queue
+
+Write your usual simulation scripts, then submit them from any Python file:
 
 ```python
 from mps_runner import run_mps_scripts
 
-manager = run_mps_scripts(
+queue = run_mps_scripts(
     [
-        {"script_path": "simulate.py", "args": ["--stiffness", str(k)],
-         "title": f"stiffness={k}"}
-        for k in [0.5, 1.5, 4.0, 8.0]
+        {"script_path": "simulate.py", "args": ["--stiffness", "0.5"], "title": "Soft"},
+        {"script_path": "another.py", "args": ["--seed", "7"], "title": "Another run"},
     ],
-    title="Stiffness sweep",
+    title="My simulations",
     gpu=0,
-    max_concurrent=4,
+    max_concurrent=2,
     detach=True,
 )
 ```
 
-Arguments are passed directly to the selected Python interpreter, without a
-shell. Each submission can use a different script. `args` is optional. The
-submitting program's interpreter, environment, and working directory are the
-defaults; `python`, `env`, and `cwd` can be supplied per job. GPU/MPS affinity
-and manager variables remain owned by the queue.
+`args` is optional. Jobs use the submitting program's Python interpreter,
+environment, and working directory by default. The selected GPU appears inside
+each script as CUDA device **0**. MPS startup or attachment failures raise an error.
 
-The selected GPU is exposed to children as local CUDA device 0. Numeric `gpu`
-selection respects the caller's visible-device allocation; a GPU UUID is also
-accepted. MPS initialization and verified-attachment failures are errors, never
-ordinary-CUDA fallbacks. `mps=False` explicitly selects ordinary process mode
-for development and CPU tests.
+`detach=True` returns immediately. The default waits for the submitted work.
+The parent queue stays available for inspection and further submissions.
+`max_concurrent` limits live children; suspended children retain their slots.
 
-`detach=True` returns immediately. The default waits for the initial work and
-returns the same manager handle. An idle or finished parent remains available
-for new submissions and inspection until explicitly shut down or terminated.
+## Add more jobs
 
-## Add jobs later
+Another Python program can find the same queue by its unique title or parent PID:
 
 ```python
 from mps_runner import connect_mps_manager
 
-manager = connect_mps_manager(title="Stiffness sweep")
-job = manager.submit("another_simulation.py", args=["--seed", "7"], title="Extra run")
+queue = connect_mps_manager(title="My simulations")
+job = queue.submit("extra.py", args=["--seed", "8"], title="Extra run")
 ```
 
-Use a unique title or `pid=...`. The submitting program and manager must run on
-the same host; project discovery defaults to `.mps-manager` in the current
-directory. `state_dir` can select another project. The manager owns one queue,
-and its concurrency limit counts all live children, including suspended ones.
+Run on the same host and in the same project directory. Queue state and logs
+live in the hidden `.mps-manager/` folder; `state_dir` can select another folder.
 
-## Open the terminal browser
+## Manage queues in the terminal
 
 ```bash
 mps-manager tui
 ```
 
-The first page lists **parent queues only**, identified by title and PID.
-Finished and closed parents remain visible. Users can inspect their children
-and logs after completion. `mps-manager tui --pid PID` jumps directly to one
-parent.
+The first screen shows **parent queues**, with titles and PIDs. Select a parent
+to view its jobs, actual child PIDs, status, details, and stdout/stderr logs.
+`mps-manager tui --pid PID` opens a particular parent directly.
 
 | Key | Action |
 | --- | --- |
-| Up / Down, PageUp / PageDown | Select parents or children; scroll logs. |
-| Enter / Right | Open parent, job details, then logs. |
-| Left / Escape | Return to the previous page. |
+| Up / Down | Select a parent or job. |
+| Enter / Right | Open the queue, job details, then logs. |
+| Left / Escape | Go back. |
 | Tab in logs | Switch stdout/stderr. |
-| `q` or Ctrl+C | Close the viewer; queues and jobs keep running. |
-| `t` | Terminate the selected **parent queue**, then permanently hide it after cleanup. |
-| `:` | Begin a command; Enter submits it. |
+| `q` / Ctrl+C | Close the viewer; jobs keep running. |
+| `t` | Terminate the selected parent and permanently hide it after cleanup. |
+| `:` | Type a command, then press Enter. |
 
-Examples: `:pause`, `:resume`, `:kill`, `:remove`, `:move 0`, `:top`, `:bottom`,
-`:shuffle`, `:title My queue`, `:name My job`, `:pause-all`, and `:resume-all`.
-Job commands target the selected child; on the parents page, pause/resume
-target the whole selected queue. A pending job can be held/released with
-pause/resume or the explicit `hold`/`release` commands.
+Commands include `:pause`, `:resume`, `:kill`, `:hold`, `:release`, `:remove`,
+`:move 0`, `:top`, `:bottom`, `:shuffle`, `:title New title`, `:pause-all`,
+and `:resume-all`. Job commands act on the selected child. On the parents screen,
+pause/resume controls the selected queue.
 
-`t` preserves logs and scientific outputs; it is not a file-deletion command.
-Removing a queued or completed job also preserves its data. Termination errors
-leave the parent visible. No PID memorization is necessary.
+Finished parents remain visible until you press `t`. Termination and removal
+preserve logs and script outputs. Cleanup errors leave the parent visible.
 
-Status, actual live PIDs, queue order, and logs are always available. This mode
-does not guess scientific progress, elapsed simulation time, or ETA. Historic
-PIDs are marked exited in details and are not shown as live PIDs in the table.
-
-## Python controls
+## Python controls and parameter sweeps
 
 ```python
-job.pause()                 # Hold a pending job or SIGSTOP a live child.
-job.resume()                # Release it or SIGCONT the same live child.
-job.kill()                  # Explicit cancellation, with MPS-aware teardown.
-job.remove()                # Remove pending/completed entry; preserve data.
-manager.move(job.id, 0)      # Reorder pending work only.
-manager.shuffle()
-manager.pause()             # Stop admission and suspend the owned children.
-manager.resume()
-manager.wait(timeout=60)    # Does not cancel jobs if it times out.
-manager.shutdown()          # Stop queue and service; retain browser history.
-manager.terminate()         # Stop and persistently hide this parent, like `t`.
+job.pause()           # Hold a queued job or suspend a live child.
+job.resume()
+job.kill()            # Cancel with MPS-aware cleanup.
+job.remove()          # Remove a queued or completed entry.
+queue.move(job.id, 0)
+queue.shuffle()
+queue.pause()         # Suspend the queue's children and stop new admissions.
+queue.resume()
+queue.wait()
+queue.shutdown()      # Stop the parent; keep its inspection history.
+queue.terminate()     # Stop and hide the parent, like pressing t.
 ```
 
-External SIGSTOP/SIGCONT and exits are reflected in the browser. Suspending a
-process retains its GPU memory and CUDA contexts, and already submitted GPU
-work can continue. Cancellation first resumes suspended driver threads, then
-asks MPS to terminate only the owned group's CUDA clients before signaling
-its processes. Arbitrary direct SIGKILL bypasses this teardown; prefer the
-manager's cancellation command for MPS clients.
-
-Ordinary script failures leave healthy siblings running. GPU/service faults
-close admission and are reported separately. No failed script is restarted.
-Changing a checkpoint/restart argument is an ordinary new submission; the
-manager neither creates checkpoints nor interprets their contents.
-
-## Optional sweeps
+Optional sweeps support Cartesian combinations, numeric ranges, correlated cases,
+and replicates. You choose how each resolved case becomes script arguments:
 
 ```python
-def make_args(case, run_dir):
-    return ["--stiffness", str(case["stiffness"]),
-            "--density", str(case["density"]), "--output", str(run_dir)]
-
-jobs = manager.submit_sweep(
+jobs = queue.submit_sweep(
     "simulate.py",
-    parameters={"stiffness": {"$sweep": [0.5, 1.5]},
-                "density": {"$sweep": [0.1, 0.2]}},
-    make_args=make_args,
-    replicates=3,
+    parameters={"stiffness": {"$sweep": [0.5, 1.5, 4.0]}},
+    make_args=lambda case, output: ["--stiffness", str(case["stiffness"]),
+                                   "--output", str(output)],
+    replicates=2,
 )
 ```
 
-Workflow's original expander resolves four combinations, repeated three times
-into twelve ordinary jobs with distinct output areas. It also supports `$cases`,
-`linspace`, and `logspace` with the existing validation and ordering. Literal
-arrays remain literal. `case.replicate` and `case.combination` are zero-based
-indices available for explicitly constructing seeds or labels; model parameters
-and random seeds are never changed automatically. The argument builder runs
-only in the submitting Python process and is not serialized to the manager.
+This submits six ordinary jobs with distinct output areas. Scripts own their
+outputs, random seeds, and checkpoint/restart behavior. Failed jobs are never
+retried automatically, and ordinary script failures leave other jobs running.
 
-## Files and service ownership
+External STOP/CONT signals are reflected in the viewer. Suspension retains GPU
+memory and contexts; already submitted GPU work can continue. Use the manager's
+kill command for MPS-aware cancellation.
 
-Generated manifests, queue metadata, per-job environment snapshots, logs, and
-default output areas live beneath `.mps-manager/queues/<queue-id>/`. Metadata
-is versioned and published atomically. Control sockets and NVIDIA MPS pipes
-use private host-local temporary directories, which work on network-mounted
-projects too. Checkpoints and other scientific output locations are script-owned.
-
-The manager starts a private MPS endpoint by default. To attach a compatible
-existing endpoint, supply `mps_pipe_directory`, or configure
-`CUDA_MPS_PIPE_DIRECTORY` before creating the manager. The child probe verifies
-the GPU UUID and its actual server registration before the submitted script
-starts. Attached services are not shut down. An owned service is stopped only
-after its clients are gone; shared external clients prevent unsafe shutdown.
-If an owned service still has another parent's clients, termination reports an
-error and leaves the owner visible and controllable. Finish those clients first,
-then explicitly terminate the owner again.
-
-## Two repositories
-
-This repository owns the human-facing Python API, NVIDIA MPS adapter, persistent
-queue engine, queue terminal browser, packaging, examples, and acceptance tests.
-Its native crate depends on the separate
-[Scientific-Workflow fork](https://github.com/wtrhacker/Scientific-Workflow).
-The fork provides its existing parameter expander, owned process groups,
-terminal restoration lease, command editor, status palette, and resource sampler
-through a small opt-in Rust API. Neither repository contains a copy of the other.
-No study manifests, recording readers, analysis pipeline, or Workflow Python
-companion are used when launching scripts.
-
-## Install and develop
-
-For the current unpublished source, keep the two Git checkouts side by side:
-
-```text
-scientific-workflow/   # Separate fork, including the external-tools feature.
-mps-manager/          # This repository; no vendored Workflow source.
-```
-
-From `mps-manager/`:
-
-```bash
-python -m pip install .
-mps-manager tui
-```
-
-Source builds require Rust 1.97+ and the separate sibling Workflow checkout.
-The development dependency is an explicit path in `native/Cargo.toml`; the
-tested fork revision is recorded in `WORKFLOW_DEPENDENCY.md`. When publishing
-the two GitHub repositories, this dependency can be changed to that Git revision
-without moving or copying either repository into the other.
-A packaged Linux wheel includes the native binary and needs no Rust compiler at
-runtime. Build a wheel with `python -m pip wheel . --no-deps -w dist`.
-`MPS_MANAGER_BINARY` selects an existing developer build. Source clients also
-look in `native/target/release` and `native/target/debug`.
-
-```bash
-cargo build --locked --manifest-path native/Cargo.toml
-export MPS_MANAGER_BINARY="$PWD/native/target/debug/mps-manager-native"
-export PYTHONPATH="$PWD/src"
-python -m pip install '.[test]'
-python -m unittest discover -s tests -p 'test_*.py' -v
-cargo test --locked --manifest-path native/Cargo.toml
-cargo clippy --locked --manifest-path native/Cargo.toml --all-targets -- -D warnings
-```
-
-`tests/live_gpu.py`, `tests/live_tui_gpu.py`, and `tests/live_attach_gpu.py` are explicit, bounded real-GPU
-acceptance runners. Launch only on a GPU host assigned to your tests. They check
-real CUDA outputs, verified MPS registration, concurrency, queue changes, signal
-controls, safe cancellation, cross-process additions, failure isolation, terminal
-restoration, retained history, and explicit termination. Their evidence and
-terminal screen captures go under the invoking project's `.mps-manager/`.
-They do not measure throughput or validate scientific models.
+To use a compatible existing MPS service, supply `mps_pipe_directory` when
+creating a queue. Attached queues leave that service running. An owned service
+can close after its clients finish; other parents' active clients prevent shutdown.

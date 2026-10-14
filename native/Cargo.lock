@@ -728,6 +728,7 @@ checksum = "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
 [[package]]
 name = "scientific-workflow"
 version = "0.16.1"
+source = "git+https://github.com/wtrhacker/Scientific-Workflow?rev=a426683b44e3106374f159ecd15d4ca666642cfd#a426683b44e3106374f159ecd15d4ca666642cfd"
 dependencies = [
  "crossterm",
  "erased-serde",
