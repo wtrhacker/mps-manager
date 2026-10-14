@@ -1,0 +1,50 @@
+name: MPS Manager
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  manager:
+    runs-on: ubuntu-22.04
+    strategy:
+      matrix:
+        python: ["3.10", "3.12"]
+    defaults:
+      run:
+        working-directory: mps-manager
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: mps-manager
+      # Publish the fork feature commit before enabling this repository's CI.
+      - uses: actions/checkout@v4
+        with:
+          repository: wtrhacker/Scientific-Workflow
+          ref: a426683b44e3106374f159ecd15d4ca666642cfd
+          path: scientific-workflow
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.97.0
+          components: rustfmt, clippy
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: cargo fmt --manifest-path native/Cargo.toml -- --check
+      - run: cargo clippy --locked --manifest-path native/Cargo.toml --all-targets -- -D warnings
+      - run: cargo test --locked --manifest-path native/Cargo.toml
+      - name: Build and install standalone wheel
+        run: |
+          python -m pip wheel . --no-deps -w dist
+          python -m pip install dist/*.whl 'pyte>=0.8,<0.9'
+      - name: Test installed package and terminal browser
+        run: |
+          python -m unittest discover -s tests -p 'test_*.py' -v
+          mps-manager --help
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mps-manager-linux-python-${{ matrix.python }}
+          path: mps-manager/dist/*.whl

@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mps-manager"
+version = "0.1.0"
+description = "Independent Python script queues on one NVIDIA GPU, with an attachable terminal manager"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+dependencies = []
+
+[project.urls]
+Source = "https://github.com/wtrhacker/mps-manager"
+
+[project.optional-dependencies]
+test = ["pyte>=0.8,<0.9"]
+
+[project.scripts]
+mps-manager = "mps_runner.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+mps_runner = ["_bin/*"]

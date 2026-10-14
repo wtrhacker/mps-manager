@@ -1,0 +1,4 @@
+include LICENSE README.md
+recursive-include native *.toml *.lock *.rs
+recursive-include examples *.py
+recursive-include tests *.py
