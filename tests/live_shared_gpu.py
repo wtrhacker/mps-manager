@@ -59,8 +59,7 @@ try:
         assert json.loads((job.run_dir/"result.json").read_text())["value"] == 17
         assert job.status()["common_args"] == ["--value","17"]
     evidence["checks"].append("common arguments reach real CUDA kernels and are recorded in child metadata")
-    swept = b.submit_sweep(fixture, parameters={"value":29,"seconds":{"$sweep":[0.2,0.3]}},
-        common_args=["--value","29"], make_args=lambda p,out:["--seconds",str(p["seconds"])])
+    swept = b.submit_sweep(fixture, parameters={"value":29,"seconds":{"$sweep":[0.2,0.3]}})
     b.wait(timeout=15)
     assert all(j.status()["parameters"]["value"] == 29 for j in swept)
     assert all(json.loads((j.run_dir/"result.json").read_text())["value"] == 29 for j in swept)

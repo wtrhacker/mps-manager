@@ -68,3 +68,11 @@ screen and the selected child in its queue, details, or logs. Real PTY checks
 verify queue and child suspension separately, and that these letters remain
 ordinary text while editing a command. The GPU acceptance run also presses these
 keys to suspend and resume a real registered MPS CUDA client.
+
+## Simple sweeps (0.2.2)
+
+Automatic `--name value` arguments, fixed values, repeated cases, optional unique
+output folders, and literal arguments containing spaces are checked against real
+child scripts. Existing custom argument functions remain covered by the earlier
+sweep tests. The manager and real PTY suite has 21 passing tests. Unsupported
+automatic value types and conflicting output arguments fail before submission.

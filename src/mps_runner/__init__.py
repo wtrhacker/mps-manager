@@ -212,11 +212,14 @@ class Manager:
         specs = [self._spec(**dict(run)) for run in runs]
         return [Job(self, job_id) for job_id in self._request("submit", runs=specs)]
 
-    def submit_sweep(self, script_path, *, parameters, make_args: Callable, replicates=1, title=None, cwd=None, python=None, common_args=None) -> list[Job]:
-        """Expand Workflow parameters, then map each case into ordinary arguments.
+    def submit_sweep(self, script_path, *, parameters, make_args: Callable | None = None, output_arg=None, replicates=1, title=None, cwd=None, python=None, common_args=None) -> list[Job]:
+        """Expand parameters and append the resulting jobs to this queue.
 
-        make_args(case, run_dir) runs in the submitting Python process. The case
-        is a dict with .replicate and .combination attributes for explicit seeds.
+        By default, each string or number becomes --name value, using the
+        parameter name exactly as written. output_arg="--output" optionally
+        passes each job's private output folder under that flag.
+        Custom argument formats can use make_args(case, run_dir) instead. The
+        case is a dict with .replicate and .combination attributes for explicit seeds.
         common_args=None inherits the parent prefix; [] opts out, and a list
         replaces that prefix for this sweep. The final arguments and complete
         resolved parameter object, including fixed values, are saved per job.
@@ -224,6 +227,11 @@ class Manager:
         """
         if isinstance(replicates, bool) or not isinstance(replicates, int) or replicates < 1:
             raise ValueError("replicates must be a positive integer")
+        if make_args is not None and not callable(make_args):
+            raise TypeError("make_args must be callable or None")
+        if output_arg is not None and (not isinstance(output_arg, str) or not output_arg.startswith("-")
+                                       or output_arg in {"-", "--"} or any(c.isspace() for c in output_arg)):
+            raise ValueError("output_arg must be an option such as '--output', or None")
         configurations = expand_parameters(parameters)
         specs = []
         for replicate in range(replicates):
@@ -231,10 +239,25 @@ class Manager:
                 if not isinstance(values, dict):
                     raise ValueError("sweep parameters must resolve to objects")
                 case = _SweepCase(values, replicate, combination)
+                args = []
+                if make_args is None:
+                    for name, value in case.items():
+                        if not name or name.startswith("-") or any(c.isspace() for c in name):
+                            raise ValueError("automatic sweep parameter names must be flag names without leading '-' or spaces")
+                        if isinstance(value, bool) or not isinstance(value, (str, int, float)):
+                            raise TypeError(f"automatic sweep argument '{name}' must be a string or number; use make_args for custom formats")
+                        if output_arg is not None and output_arg.lstrip("-") == name:
+                            raise ValueError(f"'{name}' is already in parameters; choose parameters or output_arg, not both")
+                        args.extend([f"--{name}", str(value)])
                 job_id = "job-" + uuid.uuid4().hex[:16]
                 run_dir = self._root / "jobs" / job_id / "artifacts"
                 run_dir.mkdir(parents=True, exist_ok=False)
-                args = make_args(case, run_dir)
+                if make_args is not None:
+                    args = make_args(case, run_dir)
+                if isinstance(args, (str, bytes)):
+                    raise TypeError("args must be a sequence of arguments, not a shell command")
+                if output_arg is not None:
+                    args = [*args, output_arg, str(run_dir)]
                 label = title or f"{Path(script_path).name} {json.dumps(values, separators=(',', ':'))} replicate={replicate + 1}"
                 spec = self._spec(script_path, args=args, title=label, cwd=cwd, python=python, job_id=job_id, common_args=common_args, parameters=dict(case))
                 specs.append(spec)

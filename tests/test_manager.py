@@ -146,6 +146,43 @@ class ManagerTests(unittest.TestCase):
         self.assertTrue(all(set(values) == {"stiffness", "density"} for values, _, _ in seen))
         self.assertTrue(all(job["state"] == "succeeded" for job in parent.wait(timeout=12)))
 
+    def test_sweep_without_callback_passes_fixed_values_and_unique_output_folders(self):
+        parent = self.manager(max_concurrent=2, common_args=["--label", "fixed label"])
+        jobs = parent.submit_sweep(FIXTURE,
+            parameters={"stiffness": {"$sweep": [0.5, 1.5]}, "density": 0.2, "seconds": 0.01},
+            output_arg="--output", replicates=2)
+        self.assertEqual(len(jobs), 4)
+        self.assertTrue(all(job["state"] == "succeeded" for job in parent.wait(timeout=8)))
+        records = [json.loads(job.logs("stdout").splitlines()[0])["args"] for job in jobs]
+        self.assertEqual(sorted(record["stiffness"] for record in records), [0.5, 0.5, 1.5, 1.5])
+        self.assertTrue(all(record["density"] == 0.2 and record["label"] == "fixed label" for record in records))
+        self.assertEqual(len({record["output"] for record in records}), 4)
+        for job, record in zip(jobs, records):
+            self.assertEqual(record["output"], str(job.run_dir))
+            self.assertTrue((job.run_dir / "ticks.txt").is_file())
+            self.assertEqual(job.status()["parameters"]["density"], 0.2)
+            self.assertEqual(job.status()["args"].count("--density"), 1)
+
+    def test_sweep_without_output_option_uses_script_arguments_literally(self):
+        parent = self.manager()
+        job, = parent.submit_sweep(FIXTURE, parameters={"label": "literal space; $(text)", "seconds": 0.01})
+        self.assertEqual(parent.wait(timeout=8)[0]["state"], "succeeded")
+        record = json.loads(job.logs("stdout").splitlines()[0])["args"]
+        self.assertEqual(record["label"], "literal space; $(text)")
+        self.assertEqual(record["output"], "None")
+        self.assertTrue((job.run_dir / "ticks.txt").exists())
+
+    def test_automatic_sweep_rejects_ambiguous_values_and_duplicate_output(self):
+        parent = self.manager()
+        for value in (True, None, [1, 2], {"nested": 1}):
+            with self.subTest(value=value), self.assertRaisesRegex(TypeError, "make_args"):
+                parent.submit_sweep(FIXTURE, parameters={"label": value})
+        with self.assertRaisesRegex(ValueError, "already in parameters"):
+            parent.submit_sweep(FIXTURE, parameters={"output": "fixed"}, output_arg="--output")
+        with self.assertRaisesRegex(ValueError, "output_arg"):
+            parent.submit_sweep(FIXTURE, parameters={"label": "x"}, output_arg="--output bad")
+        self.assertEqual(parent.status()["jobs"], [])
+
     def test_externally_stopped_parent_can_be_resumed_by_native_identity_check(self):
         parent = self.manager(max_concurrent=1)
         parent.pause()

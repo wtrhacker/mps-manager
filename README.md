@@ -11,7 +11,7 @@ termination support (`nvidia-smi` and `nvidia-cuda-mps-control` installed).
 The prebuilt wheel supports Linux x86_64 with glibc 2.34+:
 
 ```bash
-python -m pip install https://github.com/wtrhacker/mps-manager/releases/download/v0.2.1/mps_manager-0.2.1-py3-none-linux_x86_64.whl
+python -m pip install https://github.com/wtrhacker/mps-manager/releases/download/v0.2.2/mps_manager-0.2.2-py3-none-linux_x86_64.whl
 ```
 
 Installation provides both the `mps_runner` Python package and the `mps-manager`
@@ -38,7 +38,6 @@ queue = run_mps_scripts(
     title="My simulations",
     gpu=0,
     max_concurrent=2,
-    common_args=["--density", "0.2"],
     detach=True,
 )
 ```
@@ -50,8 +49,7 @@ each script as CUDA device **0**. MPS startup or attachment failures raise an er
 `detach=True` returns immediately. The default waits for the submitted work.
 The parent queue stays available for inspection and further submissions.
 `max_concurrent` limits this parent's live children; suspended children retain their
-slots. `common_args` is a fixed argument prefix added to every job in this queue.
-The complete effective arguments are saved for every child.
+slots. The complete effective arguments are saved for every child.
 
 ## Share a GPU across parents
 
@@ -99,6 +97,16 @@ job = queue.submit("extra.py", args=["--seed", "8"], title="Extra run")
 Run on the same host and in the same project directory. Queue state and logs
 live in the hidden `.mps-manager/` folder; `state_dir` can select another folder.
 
+Ordinary Python loops are enough for a parameter sweep:
+
+```python
+for stiffness in [0.5, 1.5, 4.0]:
+    queue.submit("simulate.py", args=["--stiffness", str(stiffness)])
+```
+
+These jobs join the existing parent queue. Its concurrency settings decide how
+many run together on the GPU.
+
 ## Manage queues in the terminal
 
 ```bash
@@ -128,23 +136,7 @@ pause/resume controls the selected queue.
 Finished parents remain visible until you press `t`. Termination and removal
 preserve logs and script outputs. Cleanup errors leave the parent visible.
 
-## Fixed arguments
-
-Parent `common_args` are inherited by ordinary jobs and sweeps. Per submission
-or sweep, `common_args=[...]` replaces that prefix, and `common_args=[]` opts out.
-Job-specific arguments are appended in the order you supply; flags are not parsed
-or rewritten by the manager.
-
-```python
-queue.set_common_args(["--density", "0.3"])  # Future jobs only.
-job = queue.submit("different.py", args=["--seed", "10"], common_args=[])
-```
-
-Already-submitted jobs keep their original argument snapshot. Job details show
-both the common prefix and full command arguments. Sweeps additionally record
-the complete resolved parameter object, including fixed values.
-
-## Python controls and parameter sweeps
+## Python controls
 
 ```python
 job.pause()           # Hold a queued job or suspend a live child.
@@ -160,22 +152,56 @@ queue.shutdown()      # Stop the parent; keep its inspection history.
 queue.terminate()     # Stop and hide the parent, like pressing t.
 ```
 
-Optional sweeps support Cartesian combinations, numeric ranges, correlated cases,
-and replicates. You choose how each resolved case becomes script arguments:
+## Optional sweep helper
+
+`run_mps_scripts` creates a parent queue, `queue.submit` adds one job, and
+`queue.submit_sweep` expands parameter combinations and adds those jobs to the
+same queue. It supports Cartesian combinations, numeric ranges, correlated
+cases, and replicates.
+
+For scripts that accept `--name value` arguments:
 
 ```python
 jobs = queue.submit_sweep(
     "simulate.py",
     parameters={"stiffness": {"$sweep": [0.5, 1.5, 4.0]}, "density": 0.2},
-    common_args=["--density", "0.2"],
-    make_args=lambda case, output: ["--stiffness", str(case["stiffness"]),
-                                   "--output", str(output)],
+    output_arg="--output",
     replicates=2,
 )
 ```
 
-This submits six ordinary jobs with distinct output areas. Scripts own their
-outputs, random seeds, and checkpoint/restart behavior. Failed jobs are never
+This adds six jobs to the existing queue. `stiffness` varies; `density` stays
+fixed at 0.2 and is defined only once. Both values are recorded for each job.
+
+Parameter names become flags exactly as written: `density` becomes `--density`,
+and `mean-depth-kt` becomes `--mean-depth-kt`. Values can be strings or numbers.
+`output_arg="--output"` adds each job's distinct output folder under that flag;
+omit it if your script does not accept an output argument. The folder is also
+available to each script through the `MPS_RUN_DIR` environment variable.
+
+For other argument formats, an optional `make_args` function can supply the
+argument list. Existing custom functions continue to work.
+
+## Fixed arguments
+
+Parent `common_args` are inherited by ordinary jobs and sweeps. Per submission
+or sweep, `common_args=[...]` replaces that prefix, and `common_args=[]` opts out.
+Job-specific arguments are appended in the order you supply; flags are not parsed
+or rewritten by the manager. Choose one place for each fixed argument: the common
+prefix or the sweep's `parameters`.
+
+```python
+queue.set_common_args(["--density", "0.3"])  # Future jobs only.
+job = queue.submit("different.py", args=["--seed", "10"], common_args=[])
+```
+
+Already-submitted jobs keep their original argument snapshot. Job details show
+both the common prefix and full command arguments. Sweeps additionally record
+the complete resolved parameter object, including fixed values.
+
+## Runtime behavior
+
+Scripts own their outputs, random seeds, and checkpoint/restart behavior. Failed jobs are never
 retried automatically, and ordinary script failures leave other jobs running.
 
 External STOP/CONT signals are reflected in the viewer. Suspension retains GPU
