@@ -165,7 +165,6 @@ For scripts that accept `--name value` arguments:
 jobs = queue.submit_sweep(
     "simulate.py",
     parameters={"stiffness": {"$sweep": [0.5, 1.5, 4.0]}, "density": 0.2},
-    output_arg="--output",
     replicates=2,
 )
 ```
@@ -175,9 +174,19 @@ fixed at 0.2 and is defined only once. Both values are recorded for each job.
 
 Parameter names become flags exactly as written: `density` becomes `--density`,
 and `mean-depth-kt` becomes `--mean-depth-kt`. Values can be strings or numbers.
-`output_arg="--output"` adds each job's distinct output folder under that flag;
-omit it if your script does not accept an output argument. The folder is also
-available to each script through the `MPS_RUN_DIR` environment variable.
+
+Input and output paths are ordinary parameters. Your program decides where and
+how to save results: it can define paths in its code or receive them through
+`args`, `common_args`, or sweep `parameters`. For example, `"output": "results/run-a"`
+in `parameters` becomes `--output results/run-a`, just like any other parameter.
+The supplied path is passed unchanged. No output argument or output folder is
+required from your script.
+
+If you explicitly want the manager to supply a distinct folder for each job,
+the optional `output_arg="--output"` shortcut adds that folder using your script's
+chosen flag. By default, no output argument is added. Scripts may also choose to
+use the `MPS_RUN_DIR` environment variable. The manager stores its own state and
+logs under `.mps-manager/`; your simulation's results can live wherever you choose.
 
 For other argument formats, an optional `make_args` function can supply the
 argument list. Existing custom functions continue to work.
