@@ -15,12 +15,6 @@ owner = run_mps_scripts(gpu=0, title="Endpoint owner", state_dir=root, detach=Tr
 attached = None
 try:
     evidence.update(parent_pid=owner.pid, gpu_uuid=owner.status()["gpu_uuid"])
-    try:
-        run_mps_scripts(gpu=0, state_dir=root, detach=True)
-    except MpsManagerError:
-        evidence["checks"].append("second private owner fails explicitly")
-    else:
-        raise AssertionError("second private owner must not silently use the GPU")
     a = owner.submit(fixture, args=["--seconds", "18"], title="owner child")
     attached = run_mps_scripts(gpu=0, title="Attached parent", state_dir=root, detach=True,
                                mps_pipe_directory=owner.status()["mps_pipe_directory"])
@@ -31,19 +25,12 @@ try:
     a.kill()
     assert b.status()["state"] == "running"
     evidence["checks"].append("attached endpoint verifies clients; owned child cancellation preserves other parent")
-    try:
-        owner.terminate()
-    except MpsManagerError:
-        assert owner.status()["state"] == "fault"
-        assert any(parent["pid"] == owner.pid for parent in list_mps_managers(state_dir=root))
-        assert b.status()["state"] == "running"
-        evidence["checks"].append("owner refuses daemon shutdown with attached clients and remains controllable/visible")
-    else:
-        raise AssertionError("owner must preserve a service with another parent's live client")
-    attached.terminate()
     owner.terminate()
-    assert not any(parent["pid"] in {owner.pid, attached.pid} for parent in list_mps_managers(state_dir=root))
-    evidence["checks"].append("attached parent never shuts down shared daemon; explicit owner cleanup succeeds afterwards")
+    assert b.status()["state"] == "running"
+    assert not any(parent["pid"] == owner.pid for parent in list_mps_managers(state_dir=root))
+    evidence["checks"].append("terminating first parent preserves attached parent's service and client")
+    attached.terminate()
+    evidence["checks"].append("attached parent shares the managed scheduler and final cleanup succeeds")
     evidence["passed"] = True
 finally:
     if attached:

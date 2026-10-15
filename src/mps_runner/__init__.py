@@ -167,10 +167,21 @@ class Manager:
     def title(self) -> str:
         return self.status()["title"]
 
+    @property
+    def common_args(self) -> list[str]:
+        """Fixed argument prefix inherited by future submissions."""
+        return list(self.status().get("common_args", []))
+
+    def set_common_args(self, args):
+        """Change defaults for future jobs; already submitted jobs keep their arguments."""
+        if isinstance(args, (str, bytes)):
+            raise TypeError("common_args must be a sequence of arguments, not a string")
+        self._request("common_args", args=[str(arg) for arg in args])
+
     def set_title(self, title: str):
         self._request("title", title=title)
 
-    def _spec(self, script_path, *, args=(), title=None, cwd=None, python=None, env=None, job_id=None) -> dict:
+    def _spec(self, script_path, *, args=(), title=None, cwd=None, python=None, env=None, job_id=None, common_args=None, parameters=None) -> dict:
         script = Path(script_path).expanduser().resolve(strict=True)
         interpreter = Path(python or sys.executable).expanduser().absolute()
         directory = Path(cwd or Path.cwd()).expanduser().resolve(strict=True)
@@ -178,6 +189,8 @@ class Manager:
             raise ValueError("script, working directory, or interpreter is invalid")
         if isinstance(args, (str, bytes)):
             raise TypeError("args must be a sequence of arguments, not a shell command")
+        if isinstance(common_args, (str, bytes)):
+            raise TypeError("common_args must be a sequence of arguments, not a string")
         owned = {"CUDA_VISIBLE_DEVICES", "CUDA_MPS_PIPE_DIRECTORY", "CUDA_MPS_LOG_DIRECTORY",
                  "CUDA_MPS_PROTOCOL_VERSION", "MPS_RUN_DIR", "MPS_JOB_ID"}
         environment = {key: value for key, value in os.environ.items()
@@ -185,11 +198,13 @@ class Manager:
         environment.update({str(key): str(value) for key, value in (env or {}).items()})
         return {"id": job_id or "job-" + uuid.uuid4().hex[:16], "script_path": str(script),
                 "args": [str(arg) for arg in args], "title": title, "cwd": str(directory),
-                "python": str(interpreter), "env": environment}
+                "python": str(interpreter), "env": environment,
+                "common_args": None if common_args is None else [str(arg) for arg in common_args],
+                "parameters": parameters}
 
-    def submit(self, script_path, *, args=(), title=None, cwd=None, python=None, env=None) -> Job:
+    def submit(self, script_path, *, args=(), title=None, cwd=None, python=None, env=None, common_args=None) -> Job:
         """Append one script; arguments are passed directly to Python without a shell."""
-        spec = self._spec(script_path, args=args, title=title, cwd=cwd, python=python, env=env)
+        spec = self._spec(script_path, args=args, title=title, cwd=cwd, python=python, env=env, common_args=common_args)
         ids = self._request("submit", runs=[spec])
         return Job(self, ids[0])
 
@@ -197,11 +212,14 @@ class Manager:
         specs = [self._spec(**dict(run)) for run in runs]
         return [Job(self, job_id) for job_id in self._request("submit", runs=specs)]
 
-    def submit_sweep(self, script_path, *, parameters, make_args: Callable, replicates=1, title=None, cwd=None, python=None) -> list[Job]:
+    def submit_sweep(self, script_path, *, parameters, make_args: Callable, replicates=1, title=None, cwd=None, python=None, common_args=None) -> list[Job]:
         """Expand Workflow parameters, then map each case into ordinary arguments.
 
         make_args(case, run_dir) runs in the submitting Python process. The case
         is a dict with .replicate and .combination attributes for explicit seeds.
+        common_args=None inherits the parent prefix; [] opts out, and a list
+        replaces that prefix for this sweep. The final arguments and complete
+        resolved parameter object, including fixed values, are saved per job.
         No scientific seed or simulation parameter is changed automatically.
         """
         if isinstance(replicates, bool) or not isinstance(replicates, int) or replicates < 1:
@@ -218,7 +236,7 @@ class Manager:
                 run_dir.mkdir(parents=True, exist_ok=False)
                 args = make_args(case, run_dir)
                 label = title or f"{Path(script_path).name} {json.dumps(values, separators=(',', ':'))} replicate={replicate + 1}"
-                spec = self._spec(script_path, args=args, title=label, cwd=cwd, python=python, job_id=job_id)
+                spec = self._spec(script_path, args=args, title=label, cwd=cwd, python=python, job_id=job_id, common_args=common_args, parameters=dict(case))
                 specs.append(spec)
         return [Job(self, job_id) for job_id in self._request("submit", runs=specs)]
 
@@ -353,17 +371,26 @@ def connect_mps_manager(pid=None, *, title=None, state_dir=".mps-manager") -> Ma
 
 
 def run_mps_scripts(runs=(), *, gpu=0, max_concurrent=4, title=None, state_dir=".mps-manager", detach=False,
-                    python=None, mps_pipe_directory=None, mps=True) -> Manager:
+                    python=None, mps_pipe_directory=None, mps=True, common_args=(), gpu_max_concurrent=None) -> Manager:
     """Create a parent queue and submit scripts. NVIDIA MPS is strict by default.
 
     detach=True returns immediately for later submissions. detach=False waits
     for this initial batch, but the manager stays available until shutdown().
-    mps=False is explicit ordinary-process mode for development and CPU tests.
+    Parents on the same GPU automatically share a service, with round-robin
+    admission between parents and FIFO within each queue. gpu_max_concurrent
+    sets the shared service limit (default 64 for the first parent); later
+    parents inherit it when omitted. common_args prefixes each child's args.
+    mps=False is explicit ordinary-process mode for development and CPU tests;
+    providing gpu_max_concurrent enables shared scheduling for CPU tests too.
     """
     if sys.platform != "linux":
         raise MpsManagerError("the external-script manager currently requires Linux")
     if isinstance(max_concurrent, bool) or not isinstance(max_concurrent, int) or not 1 <= max_concurrent <= 64:
         raise ValueError("max_concurrent must be an integer between 1 and 64")
+    if isinstance(common_args, (str, bytes)):
+        raise TypeError("common_args must be a sequence of arguments, not a string")
+    if gpu_max_concurrent is not None and (isinstance(gpu_max_concurrent, bool) or not isinstance(gpu_max_concurrent, int) or not 1 <= gpu_max_concurrent <= 64):
+        raise ValueError("gpu_max_concurrent must be an integer between 1 and 64")
     if not isinstance(mps, bool):
         raise TypeError("mps must be a boolean; MPS is never disabled automatically")
     root = Path(state_dir).expanduser().resolve()
@@ -374,7 +401,8 @@ def run_mps_scripts(runs=(), *, gpu=0, max_concurrent=4, title=None, state_dir="
     configuration = {"id": queue_id, "title": title or f"GPU {gpu} queue", "state_dir": str(root),
                      "worker": str(Path(__file__).parent / "_worker.py"), "python": str(Path(python or sys.executable).absolute()),
                      "gpu": str(gpu), "max_concurrent": max_concurrent, "mps": bool(mps),
-                     "mps_pipe_directory": str(Path(mps_pipe_directory).resolve()) if mps_pipe_directory else None}
+                     "mps_pipe_directory": str(Path(mps_pipe_directory).resolve()) if mps_pipe_directory else None,
+                     "common_args": [str(arg) for arg in common_args], "gpu_max_concurrent": gpu_max_concurrent}
     manifest.write_text(json.dumps(configuration))
     with (queue_dir / "manager.log").open("wb") as log:
         process = subprocess.Popen([str(_binary()), "daemon", str(manifest)], stdin=subprocess.DEVNULL,

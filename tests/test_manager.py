@@ -197,6 +197,93 @@ class ManagerTests(unittest.TestCase):
             os.environ["PATH"] = original
         self.assertFalse(list(self.root.glob("queues/*/jobs/*/stdout.log")))
 
+    def test_shared_round_robin_fifo_and_independent_termination(self):
+        a = self.manager(max_concurrent=1, gpu_max_concurrent=1)
+        blocker = a.submit(FIXTURE, args=["--seconds", "10"], title="blocker")
+        until(lambda: blocker.status()["state"] == "running")
+        b = run_mps_scripts(mps=False, detach=True, state_dir=self.root, title="Parent B", max_concurrent=1, gpu_max_concurrent=1)
+        self.parents.append(b)
+        self.assertEqual(a.status()["service_pid"], b.status()["service_pid"])
+        jobs_a = [a.submit(FIXTURE, args=["--seconds", "0.15"], title=f"A{i}") for i in range(3)]
+        jobs_b = [b.submit(FIXTURE, args=["--seconds", "0.15"], title=f"B{i}") for i in range(3)]
+        blocker.pause()
+        until(lambda: blocker.status()["state"] == "suspended")
+        time.sleep(0.15)
+        self.assertTrue(all(job.pid is None for job in jobs_a + jobs_b))
+        blocker.kill()
+        a.wait(timeout=10)
+        b.wait(timeout=10)
+        order = sorted([j.status() for j in jobs_a + jobs_b], key=lambda j: j["admission_sequence"])
+        self.assertEqual([j["title"] for j in order], ["B0", "A0", "B1", "A1", "B2", "A2"])
+        running = b.submit(FIXTURE, args=["--seconds", "0.8"])
+        until(lambda: running.status()["state"] == "running")
+        a.terminate()
+        self.assertEqual(running.status()["state"], "running")
+        b.wait(timeout=8)
+        self.assertEqual(running.status()["state"], "succeeded")
+        self.assertEqual([p["title"] for p in list_mps_managers(state_dir=self.root) if p["alive"]], ["Parent B"])
+
+    def test_shared_pause_hold_reorder_and_global_limit(self):
+        a = self.manager(max_concurrent=2, gpu_max_concurrent=1)
+        blocker = a.submit(FIXTURE, args=["--seconds", "10"])
+        until(lambda: blocker.status()["state"] == "running")
+        b = run_mps_scripts(mps=False, detach=True, state_dir=self.root, title="Other", max_concurrent=2, gpu_max_concurrent=1)
+        self.parents.append(b)
+        aa = [a.submit(FIXTURE, title=f"A{i}") for i in range(2)]
+        bb = [b.submit(FIXTURE, title=f"B{i}") for i in range(3)]
+        bb[0].pause()
+        b.move(bb[2].id, 0)
+        a.pause()
+        blocker.kill()
+        b.wait(timeout=8)
+        self.assertTrue(all(j.pid is None for j in aa))
+        self.assertIsNone(bb[0].pid)
+        self.assertLess(bb[2].status()["admission_sequence"], bb[1].status()["admission_sequence"])
+        a.resume()
+        bb[0].resume()
+        a.wait(timeout=8)
+        b.wait(timeout=8)
+        with self.assertRaises(MpsManagerError):
+            run_mps_scripts(mps=False, detach=True, state_dir=self.root, gpu_max_concurrent=2)
+
+    def test_common_args_inheritance_replacement_snapshots_and_fixed_parameters(self):
+        parent = self.manager(common_args=["--label", "fixed", "--density", "0.2"])
+        parent.pause()
+        inherited = parent.submit(FIXTURE, args=["--seconds", "0.1"])
+        opted_out = parent.submit(FIXTURE, args=["--label", "separate"], common_args=[])
+        swept = parent.submit_sweep(FIXTURE,
+            parameters={"stiffness": {"$sweep": [0.5, 1.5]}, "fixed_value": 72},
+            common_args=["--density", "0.4"],
+            make_args=lambda case, output: ["--stiffness", str(case["stiffness"])])
+        connected = connect_mps_manager(parent.pid, state_dir=self.root)
+        connected.set_common_args(["--label", "future"])
+        future = connected.submit(FIXTURE)
+        self.assertEqual(inherited.status()["common_args"], ["--label", "fixed", "--density", "0.2"])
+        self.assertEqual(inherited.status()["args"], inherited.status()["common_args"] + ["--seconds", "0.1"])
+        self.assertEqual(opted_out.status()["common_args"], [])
+        self.assertEqual(future.status()["args"], ["--label", "future"])
+        self.assertEqual(swept[0].status()["parameters"], {"stiffness": 0.5, "fixed_value": 72})
+        self.assertEqual(swept[1].status()["common_args"], ["--density", "0.4"])
+        parent.resume()
+        self.assertTrue(all(j["state"] == "succeeded" for j in parent.wait(timeout=10)))
+        self.assertIn('"label": "fixed"', inherited.logs("stdout"))
+        self.assertIn('"label": "separate"', opted_out.logs("stdout"))
+        self.assertIn('"density": 0.4', swept[0].logs("stdout"))
+
+    def test_departed_parent_does_not_reset_round_robin_cursor(self):
+        a = self.manager(gpu_max_concurrent=1)
+        b = run_mps_scripts(mps=False, detach=True, state_dir=self.root, title="B", gpu_max_concurrent=1)
+        c = run_mps_scripts(mps=False, detach=True, state_dir=self.root, title="C", gpu_max_concurrent=1)
+        self.parents.extend([b, c])
+        blocker = b.submit(FIXTURE, args=["--seconds", "10"])
+        until(lambda: blocker.status()["state"] == "running")
+        ja = a.submit(FIXTURE)
+        jc = c.submit(FIXTURE)
+        b.terminate()
+        a.wait(timeout=8)
+        c.wait(timeout=8)
+        self.assertLess(jc.status()["admission_sequence"], ja.status()["admission_sequence"])
+
 
 if __name__ == "__main__":
     unittest.main()

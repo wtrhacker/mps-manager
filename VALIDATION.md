@@ -1,5 +1,26 @@
 # Validation of the initial implementation
 
+## Version 0.2.0: shared services and fixed arguments
+
+Validated on 2026-10-15 with 17 Python integration/PTY tests, three native unit
+tests, strict Clippy, and formatting checks. The same tests pass against the
+installed wheel in base. Installation uses `--no-deps`; the existing OpenMM,
+Polychrom, NumPy, Torch, and Triton installations are reused.
+
+A bounded real-GPU run verified automatic sharing on GPU 0, inherited GPU-wide
+limits, round-robin admission across parents, FIFO within each parent, retained
+slots during suspension, common arguments reaching actual CUDA kernels, and
+fixed/resolved parameter metadata. The TUI displayed both parents independently.
+Terminating the first parent through `t` preserved the second parent's CUDA job;
+the final parent closed the owned service. A second phase ran CUDA jobs from two
+parents concurrently in one service. Captured admission order was B0, A0, B1, A1,
+B2, A2 after an earlier A job released its slot.
+
+The prior v0.1 results below describe that release's original explicit-attachment
+behavior; automatic service sharing supersedes its first-parent ownership rule.
+
+## Version 0.1.0
+
 Validated on 2026-10-13 against Scientific-Workflow fork commit
 `a426683b44e3106374f159ecd15d4ca666642cfd`.
 

@@ -19,6 +19,27 @@ pub(super) struct Mps {
 }
 
 impl Mps {
+    pub fn connection(uuid: String, pipe: PathBuf) -> Self {
+        let env = BTreeMap::from([
+            ("CUDA_VISIBLE_DEVICES".into(), uuid.clone()),
+            (
+                "CUDA_MPS_PIPE_DIRECTORY".into(),
+                pipe.to_string_lossy().into_owned(),
+            ),
+            (
+                "CUDA_MPS_LOG_DIRECTORY".into(),
+                pipe.join("logs").to_string_lossy().into_owned(),
+            ),
+            ("CUDA_MPS_PROTOCOL_VERSION".into(), "2".into()),
+        ]);
+        Self {
+            uuid,
+            pipe,
+            env,
+            daemon: None,
+            _lease: None,
+        }
+    }
     pub fn start(launch: &Launch) -> Result<Self> {
         let uuid = select_gpu(&launch.gpu)?;
         let pipe = launch.mps_pipe_directory.clone().or_else(|| {
@@ -199,7 +220,7 @@ fn numbers(text: &str) -> Vec<u32> {
         .collect()
 }
 
-fn select_gpu(selection: &str) -> Result<String> {
+pub(super) fn select_gpu(selection: &str) -> Result<String> {
     if selection.trim().is_empty() {
         return Err("select a GPU index or UUID".into());
     }

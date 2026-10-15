@@ -11,7 +11,7 @@ termination support (`nvidia-smi` and `nvidia-cuda-mps-control` installed).
 The prebuilt wheel supports Linux x86_64 with glibc 2.34+:
 
 ```bash
-python -m pip install https://github.com/wtrhacker/mps-manager/releases/download/v0.1.0/mps_manager-0.1.0-py3-none-linux_x86_64.whl
+python -m pip install https://github.com/wtrhacker/mps-manager/releases/download/v0.2.0/mps_manager-0.2.0-py3-none-linux_x86_64.whl
 ```
 
 Installation provides both the `mps_runner` Python package and the `mps-manager`
@@ -38,6 +38,7 @@ queue = run_mps_scripts(
     title="My simulations",
     gpu=0,
     max_concurrent=2,
+    common_args=["--density", "0.2"],
     detach=True,
 )
 ```
@@ -48,7 +49,41 @@ each script as CUDA device **0**. MPS startup or attachment failures raise an er
 
 `detach=True` returns immediately. The default waits for the submitted work.
 The parent queue stays available for inspection and further submissions.
-`max_concurrent` limits live children; suspended children retain their slots.
+`max_concurrent` limits this parent's live children; suspended children retain their
+slots. `common_args` is a fixed argument prefix added to every job in this queue.
+The complete effective arguments are saved for every child.
+
+## Share a GPU across parents
+
+Create another parent with the same `gpu` value. Sharing is automatic:
+
+```python
+other = run_mps_scripts(
+    [{"script_path": "extra.py", "args": ["--seed", "9"]}],
+    title="Another queue",
+    gpu=0,
+    detach=True,
+)
+```
+
+Both parents keep their own titles, PIDs, jobs, and controls in the TUI. The
+shared service lives independently of either parent. Terminating one parent
+cancels only its children; the service stays available for the other parents.
+After the final parent closes, the owned service closes once its clients are gone.
+
+Admission is **FIFO within each parent and round-robin between eligible parents**.
+When both have work and room under their limits, the next slots go A1, B1, A2, B2.
+Paused parents and held jobs are skipped. Already-running jobs continue, and
+completion order depends on the scripts. GPU execution can be concurrent.
+
+`gpu_max_concurrent` sets the **total live-job limit across parents**. Set it on
+the first parent, for example `gpu_max_concurrent=8`; subsequent parents inherit
+it when omitted. The initial default is 64. An explicitly conflicting limit is
+an error. This is a job-count limit; choose a value that fits your jobs' GPU memory
+and compute requirements. Each parent's `max_concurrent` also continues to apply.
+
+Use the same project directory or `state_dir` to browse both parents together.
+GPU sharing also works between parents whose project folders differ.
 
 ## Add more jobs
 
@@ -92,6 +127,22 @@ pause/resume controls the selected queue.
 Finished parents remain visible until you press `t`. Termination and removal
 preserve logs and script outputs. Cleanup errors leave the parent visible.
 
+## Fixed arguments
+
+Parent `common_args` are inherited by ordinary jobs and sweeps. Per submission
+or sweep, `common_args=[...]` replaces that prefix, and `common_args=[]` opts out.
+Job-specific arguments are appended in the order you supply; flags are not parsed
+or rewritten by the manager.
+
+```python
+queue.set_common_args(["--density", "0.3"])  # Future jobs only.
+job = queue.submit("different.py", args=["--seed", "10"], common_args=[])
+```
+
+Already-submitted jobs keep their original argument snapshot. Job details show
+both the common prefix and full command arguments. Sweeps additionally record
+the complete resolved parameter object, including fixed values.
+
 ## Python controls and parameter sweeps
 
 ```python
@@ -114,7 +165,8 @@ and replicates. You choose how each resolved case becomes script arguments:
 ```python
 jobs = queue.submit_sweep(
     "simulate.py",
-    parameters={"stiffness": {"$sweep": [0.5, 1.5, 4.0]}},
+    parameters={"stiffness": {"$sweep": [0.5, 1.5, 4.0]}, "density": 0.2},
+    common_args=["--density", "0.2"],
     make_args=lambda case, output: ["--stiffness", str(case["stiffness"]),
                                    "--output", str(output)],
     replicates=2,
@@ -129,6 +181,9 @@ External STOP/CONT signals are reflected in the viewer. Suspension retains GPU
 memory and contexts; already submitted GPU work can continue. Use the manager's
 kill command for MPS-aware cancellation.
 
-To use a compatible existing MPS service, supply `mps_pipe_directory` when
-creating a queue. Attached queues leave that service running. An owned service
-can close after its clients finish; other parents' active clients prevent shutdown.
+To use a compatible externally managed MPS service, supply `mps_pipe_directory`
+when creating a queue. Its parent queues share admission too, and leave the
+external service running. Ordinary same-GPU sharing needs no pipe argument.
+
+Existing v0.1 parent queues keep their original behavior; close them before
+starting the new automatic shared-service mode. Their saved history remains readable.

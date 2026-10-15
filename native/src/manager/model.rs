@@ -48,6 +48,14 @@ pub(crate) struct Job {
     pub(crate) title: String,
     pub(crate) script_path: PathBuf,
     pub(crate) args: Vec<String>,
+    #[serde(default)]
+    pub(crate) common_args: Vec<String>,
+    #[serde(default)]
+    pub(crate) submitted_args: Vec<String>,
+    #[serde(default)]
+    pub(crate) parameters: Option<serde_json::Value>,
+    #[serde(default)]
+    pub(crate) admission_sequence: Option<u64>,
     pub(crate) python: PathBuf,
     pub(crate) cwd: PathBuf,
     #[serde(default, skip_serializing)]
@@ -78,6 +86,12 @@ pub(crate) struct Parent {
     pub(crate) mps_pipe_directory: Option<PathBuf>,
     pub(crate) mps: bool,
     pub(crate) max_concurrent: usize,
+    #[serde(default)]
+    pub(crate) common_args: Vec<String>,
+    #[serde(default)]
+    pub(crate) gpu_max_concurrent: Option<usize>,
+    #[serde(default)]
+    pub(crate) service_pid: Option<u32>,
     pub(crate) admission_paused: bool,
     pub(crate) state: String,
     pub(crate) error: Option<String>,
@@ -129,7 +143,7 @@ impl Parent {
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct Launch {
     pub id: String,
@@ -139,6 +153,10 @@ pub(super) struct Launch {
     pub python: PathBuf,
     pub gpu: String,
     pub max_concurrent: usize,
+    #[serde(default)]
+    pub common_args: Vec<String>,
+    #[serde(default)]
+    pub gpu_max_concurrent: Option<usize>,
     pub mps: bool,
     #[serde(default)]
     pub mps_pipe_directory: Option<PathBuf>,
@@ -151,6 +169,10 @@ pub(super) struct Submission {
     pub script_path: PathBuf,
     #[serde(default)]
     pub args: Vec<String>,
+    #[serde(default)]
+    pub common_args: Option<Vec<String>>,
+    #[serde(default)]
+    pub parameters: Option<serde_json::Value>,
     pub python: PathBuf,
     pub cwd: PathBuf,
     #[serde(default)]

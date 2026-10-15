@@ -17,6 +17,7 @@ use super::model::{
     write_json,
 };
 use super::mps::{Mps, socket_directory};
+use super::shared::Coordinator;
 use super::wire::{receive, same_user, send};
 use scientific_workflow::external::{ProcessTree, spawn};
 
@@ -36,6 +37,7 @@ struct Server {
     parent: Parent,
     worker: PathBuf,
     mps: Option<Mps>,
+    coordinator: Option<Coordinator>,
     active: BTreeMap<String, Active>,
     shutting_down: bool,
     dismiss_after_shutdown: bool,
@@ -68,6 +70,12 @@ fn run_inner(launch: Launch, root: &Path) -> Result<()> {
     if launch.max_concurrent == 0 || launch.max_concurrent > 64 {
         return Err("max_concurrent must be between 1 and 64".into());
     }
+    if launch
+        .gpu_max_concurrent
+        .is_some_and(|limit| limit == 0 || limit > 64)
+    {
+        return Err("gpu_max_concurrent must be between 1 and 64".into());
+    }
     if !launch.worker.is_file() || !launch.python.is_file() {
         return Err("Python interpreter or worker is missing".into());
     }
@@ -88,6 +96,9 @@ fn run_inner(launch: Launch, root: &Path) -> Result<()> {
         mps_pipe_directory: None,
         mps: launch.mps,
         max_concurrent: launch.max_concurrent,
+        common_args: launch.common_args.clone(),
+        gpu_max_concurrent: None,
+        service_pid: None,
         admission_paused: false,
         state: "starting".into(),
         error: None,
@@ -98,15 +109,25 @@ fn run_inner(launch: Launch, root: &Path) -> Result<()> {
         dismissed: false,
     };
     write_json(&root.join("state.json"), &parent)?;
-    let mut mps = if launch.mps {
-        Some(Mps::start(&launch)?)
+    let coordinator = if launch.mps || launch.gpu_max_concurrent.is_some() {
+        Some(Coordinator::join(&launch, &parent)?)
     } else {
         None
     };
-    if let Some(adapter) = &mut mps {
-        probe(&launch, root, adapter)?;
-        parent.gpu_uuid = Some(adapter.uuid.clone());
-        parent.mps_pipe_directory = Some(adapter.pipe.clone());
+    let mps = if launch.mps {
+        let service = coordinator.as_ref().ok_or("GPU service is missing")?;
+        Some(Mps::connection(
+            service.uuid.clone().ok_or("GPU UUID is missing")?,
+            service.pipe.clone().ok_or("MPS endpoint is missing")?,
+        ))
+    } else {
+        None
+    };
+    if let Some(service) = &coordinator {
+        parent.gpu_uuid = service.uuid.clone();
+        parent.mps_pipe_directory = service.pipe.clone();
+        parent.gpu_max_concurrent = Some(service.limit);
+        parent.service_pid = Some(service.pid);
     }
     let listener = UnixListener::bind(&socket)?;
     fs::set_permissions(&socket, fs::Permissions::from_mode(0o600))?;
@@ -128,6 +149,7 @@ fn run_inner(launch: Launch, root: &Path) -> Result<()> {
         parent,
         worker: launch.worker,
         mps,
+        coordinator,
         active: BTreeMap::new(),
         shutting_down: false,
         dismiss_after_shutdown: false,
@@ -175,6 +197,13 @@ fn run_inner(launch: Launch, root: &Path) -> Result<()> {
             server.save()?;
         }
         if health.elapsed() >= Duration::from_secs(1) {
+            if let Some(service) = &server.coordinator
+                && let Err(error) = service.health()
+            {
+                server.parent.error = Some(error.to_string());
+                server.parent.state = "fault".into();
+                server.parent.admission_paused = true;
+            }
             if let Some(mps) = &mut server.mps {
                 if let Err(error) = mps.health() {
                     server.parent.error = Some(error.to_string());
@@ -226,6 +255,9 @@ fn run_inner(launch: Launch, root: &Path) -> Result<()> {
             }
             server.parent.pending.clear();
             if complete && server.active.is_empty() {
+                if let Some(service) = &mut server.coordinator {
+                    service.leave()?;
+                }
                 if let Some(mps) = &mut server.mps
                     && let Err(error) = mps.stop()
                 {
@@ -250,7 +282,7 @@ fn run_inner(launch: Launch, root: &Path) -> Result<()> {
     Ok(())
 }
 
-fn probe(launch: &Launch, root: &Path, mps: &mut Mps) -> Result<()> {
+pub(super) fn probe(launch: &Launch, root: &Path, mps: &mut Mps) -> Result<()> {
     let directory = root.join("probe");
     fs::create_dir_all(&directory)?;
     let log = File::create(directory.join("probe.log"))?;
@@ -331,6 +363,9 @@ impl Server {
         match action {
             "status" => return Ok(serde_json::to_value(&self.parent)?),
             "job" => return Ok(serde_json::to_value(self.job_mut(id)?)?),
+            "common_args" => {
+                self.parent.common_args = serde_json::from_value(request["args"].clone())?;
+            }
             "submit" => {
                 if self.shutting_down || self.parent.state == "fault" {
                     return Err("queue is closing or faulted; no jobs admitted".into());
@@ -402,11 +437,20 @@ impl Server {
                             .join("environment.json"),
                         &spec.env,
                     )?;
+                    let common_args = spec
+                        .common_args
+                        .unwrap_or_else(|| self.parent.common_args.clone());
+                    let mut args = common_args.clone();
+                    args.extend(spec.args.clone());
                     jobs.push(Job {
                         id: spec.id,
                         title,
                         script_path: spec.script_path,
-                        args: spec.args,
+                        args,
+                        common_args,
+                        submitted_args: spec.args,
+                        parameters: spec.parameters,
+                        admission_sequence: None,
                         python: spec.python,
                         cwd: spec.cwd,
                         env: spec.env,
@@ -720,12 +764,22 @@ impl Server {
                 }
             }
         }
+        if changed {
+            self.save()?;
+        }
         while !self.shutting_down
             && !self.parent.admission_paused
             && self.active.len() < self.parent.max_concurrent
             && !self.parent.pending.is_empty()
         {
-            let id = self.parent.pending.remove(0);
+            let id = self.parent.pending[0].clone();
+            if let Some(service) = &self.coordinator {
+                let Some(sequence) = service.acquire(&id)? else {
+                    break;
+                };
+                self.job_mut(&id)?.admission_sequence = Some(sequence);
+            }
+            self.parent.pending.remove(0);
             if let Err(error) = self.launch(&id) {
                 let job = self.job_mut(&id)?;
                 job.state = Status::Failed;
@@ -780,6 +834,7 @@ impl Server {
             command.envs(mps.environment());
         }
         let mut process = spawn(&mut command)?;
+        let process_pid = process.id();
         let identity = process_identity(process.id()).ok_or("cannot identify launched child")?;
         job.pid = Some(process.id());
         job.process_start = Some(identity.1);
@@ -797,6 +852,9 @@ impl Server {
         );
         *self.job_mut(id)? = job;
         self.save()?;
+        if let Some(service) = &self.coordinator {
+            service.bind(id, process_pid, identity.1)?;
+        }
         Ok(())
     }
 }

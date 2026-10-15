@@ -6,6 +6,7 @@
 mod model;
 mod mps;
 mod server;
+mod shared;
 mod wire;
 
 pub(crate) use model::process_identity;
@@ -22,6 +23,11 @@ pub fn run_cli() -> Result<(), Box<dyn std::error::Error>> {
     let arguments: Vec<String> = std::env::args().skip(1).collect();
     let command = arguments.first().map(String::as_str).unwrap_or("help");
     match command {
+        "service" => shared::run(std::path::Path::new(
+            arguments
+                .get(1)
+                .ok_or("service requires its state directory")?,
+        ))?,
         "daemon" => server::run(std::path::Path::new(
             arguments
                 .get(1)

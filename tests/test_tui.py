@@ -78,10 +78,10 @@ class TuiTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix="wf-manager-tui-")
         self.root = Path(self.temporary.name) / ".mps-manager"
-        self.a = run_mps_scripts(mps=False, detach=True, title="QUEUE ALPHA", state_dir=self.root, max_concurrent=1)
+        self.a = run_mps_scripts(mps=False, detach=True, title="QUEUE ALPHA", state_dir=self.root, max_concurrent=1, gpu_max_concurrent=1)
         self.a.pause()
         self.job = self.a.submit(FIXTURE, args=["--seconds", "0.2", "--label", "LOG MARKER"], title="CHILD ONLY LABEL")
-        self.b = run_mps_scripts(mps=False, detach=True, title="QUEUE BETA", state_dir=self.root)
+        self.b = run_mps_scripts(mps=False, detach=True, title="QUEUE BETA", state_dir=self.root, gpu_max_concurrent=1)
         self.terminals = []
 
     def tearDown(self):

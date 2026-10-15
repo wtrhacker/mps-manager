@@ -358,7 +358,7 @@ fn render(frame: &mut ratatui::Frame<'_>, parents: &[Parent], view: &View, usage
         } else if let Some(job) = view.job(parent) {
             if view.level == 2 {
                 let content = format!(
-                    "Title: {}\nJob: {}\nPID{}: {}\nStatus: {}\nScript: {}\nArguments: {}\nWorking directory: {}\nOutput area: {}\nExit code: {}\n{}",
+                    "Title: {}\nJob: {}\nPID{}: {}\nStatus: {}\nScript: {}\nArguments: {}\nFixed/common arguments: {}\nResolved parameters: {}\nGPU admission: {}\nWorking directory: {}\nOutput area: {}\nExit code: {}\n{}",
                     job.title,
                     job.id,
                     if job.state.terminal() {
@@ -370,6 +370,12 @@ fn render(frame: &mut ratatui::Frame<'_>, parents: &[Parent], view: &View, usage
                     job.state.label(),
                     job.script_path.display(),
                     serde_json::to_string(&job.args).unwrap_or_default(),
+                    serde_json::to_string(&job.common_args).unwrap_or_default(),
+                    job.parameters
+                        .as_ref()
+                        .map_or_else(|| "—".into(), |v| v.to_string()),
+                    job.admission_sequence
+                        .map_or_else(|| "—".into(), |n| n.to_string()),
                     job.cwd.display(),
                     job.run_dir.display(),
                     job.exit_code.map_or("—".into(), |code| code.to_string()),
@@ -578,15 +584,18 @@ fn render_jobs(frame: &mut ratatui::Frame<'_>, area: Rect, parent: &Parent, sele
             .add_modifier(Modifier::BOLD),
     )
     .block(Block::default().borders(Borders::ALL).title(format!(
-        " Jobs · {} live / {} limit · {} ",
-        parent.counts().1,
-        parent.max_concurrent,
-        if parent.admission_paused {
-            "admission paused"
-        } else {
-            "accepting submissions"
-        }
-    )));
+            " Jobs · {} live / {} parent limit · {}{} ",
+            parent.counts().1,
+            parent.max_concurrent,
+            parent
+                .gpu_max_concurrent
+                .map_or_else(String::new, |limit| format!("shared GPU limit {limit} · ")),
+            if parent.admission_paused {
+                "admission paused"
+            } else {
+                "accepting submissions"
+            }
+        )));
     let mut state = TableState::default().with_selected(if jobs.is_empty() {
         None
     } else {
