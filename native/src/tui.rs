@@ -157,6 +157,13 @@ impl View {
                 }
             }
             KeyCode::Char('q') if !editing => self.quit = true,
+            KeyCode::Char(shortcut @ ('p' | 'r')) if !editing => {
+                let action = if shortcut == 'p' { "pause" } else { "resume" };
+                self.notice = match self.command(action, parents) {
+                    Ok(()) => format!("{action}: accepted"),
+                    Err(error) => error.to_string(),
+                };
+            }
             KeyCode::Char('t') if !editing => {
                 if let Some(parent) = self.parent(parents) {
                     self.terminating_parent = Some(parent.id.clone());
@@ -425,13 +432,19 @@ fn render(frame: &mut ratatui::Frame<'_>, parents: &[Parent], view: &View, usage
         messages,
     );
     let percent = |value: Option<f64>| value.map_or("—".into(), |value| format!("{value:.0}%"));
-    let help = if view.level == 0 {
-        "↑/↓ select parent · Enter/→ open · q detach · t terminate parent · : commands"
+    let controls = if view.level == 0 {
+        "p pause queue · r resume queue · t terminate parent · q detach"
     } else {
-        "↑/↓ select · ← back · → details/logs · q detach · t terminate parent · : commands"
+        "p pause child · r resume child · t terminate parent · q detach"
+    };
+    let navigation = if view.level == 0 {
+        "↑/↓ select parent · Enter/→ open · : commands"
+    } else {
+        "↑/↓ select · ← back · → details/logs · Tab stdout/stderr · : commands"
     };
     let lines = vec![
-        Line::from(help),
+        Line::from(controls),
+        Line::from(navigation),
         Line::from(vec![
             Span::styled("> ", Style::default().fg(Color::Cyan)),
             Span::raw(view.input.text()),
@@ -618,10 +631,11 @@ mod tests {
         assert_eq!(view.level, 2);
         view.key(KeyCode::Right, &[]);
         assert_eq!(view.level, 3);
+        view.key(KeyCode::Char(':'), &[]);
         view.key(KeyCode::Char('p'), &[]);
         view.key(KeyCode::Left, &[]);
         assert_eq!(view.level, 3);
-        assert_eq!(view.input.text(), "p");
+        assert_eq!(view.input.text(), ":p");
     }
 
     #[test]

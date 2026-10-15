@@ -60,3 +60,11 @@ The existing ignored Workflow NPY tests require the optional Python 3.14 compani
 environment; the new manager has no dependency on that companion or on analysis.
 Workflow's pre-existing all-targets Clippy lint under Rust 1.98 was not rewritten;
 its library and the new manager's complete targets pass strict Clippy.
+
+## Pause/resume shortcuts (0.2.1)
+
+The visible `p` and `r` controls pause/resume the selected queue on the parents
+screen and the selected child in its queue, details, or logs. Real PTY checks
+verify queue and child suspension separately, and that these letters remain
+ordinary text while editing a command. The GPU acceptance run also presses these
+keys to suspend and resume a real registered MPS CUDA client.

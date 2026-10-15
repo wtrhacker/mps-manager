@@ -11,7 +11,7 @@ termination support (`nvidia-smi` and `nvidia-cuda-mps-control` installed).
 The prebuilt wheel supports Linux x86_64 with glibc 2.34+:
 
 ```bash
-python -m pip install https://github.com/wtrhacker/mps-manager/releases/download/v0.2.0/mps_manager-0.2.0-py3-none-linux_x86_64.whl
+python -m pip install https://github.com/wtrhacker/mps-manager/releases/download/v0.2.1/mps_manager-0.2.1-py3-none-linux_x86_64.whl
 ```
 
 Installation provides both the `mps_runner` Python package and the `mps-manager`
@@ -115,6 +115,7 @@ to view its jobs, actual child PIDs, status, details, and stdout/stderr logs.
 | Enter / Right | Open the queue, job details, then logs. |
 | Left / Escape | Go back. |
 | Tab in logs | Switch stdout/stderr. |
+| `p` / `r` | Pause / resume the selected queue on the parents screen, or the selected child inside a queue. |
 | `q` / Ctrl+C | Close the viewer; jobs keep running. |
 | `t` | Terminate the selected parent and permanently hide it after cleanup. |
 | `:` | Type a command, then press Enter. |

@@ -17,6 +17,7 @@ import unittest
 import pyte
 
 from mps_runner import list_mps_managers, run_mps_scripts
+from test_manager import until
 
 FIXTURE = Path(__file__).parent / "fixtures" / "process_job.py"
 
@@ -142,10 +143,38 @@ class TuiTests(unittest.TestCase):
     def test_title_command_does_not_trigger_t_hotkey(self):
         terminal = self.terminal(self.a.pid)
         terminal.wait(lambda text: "CHILD ONLY LABEL" in text)
-        terminal.keys(b":title RENAMED QUEUE\r")
-        terminal.wait(lambda text: "RENAMED QUEUE" in text)
-        self.assertEqual(self.a.title, "RENAMED QUEUE")
+        terminal.keys(b":title proper title\r")
+        terminal.wait(lambda text: "proper title" in text)
+        self.assertEqual(self.a.title, "proper title")
+        self.assertTrue(self.a.status()["admission_paused"])
         self.assertTrue(any(parent["pid"] == self.a.pid for parent in list_mps_managers(state_dir=self.root)))
+
+    def test_pause_resume_shortcuts_control_selected_queue_and_child(self):
+        live = self.a.submit(FIXTURE, args=["--seconds", "20"], title="LONG CHILD")
+        terminal = self.terminal()
+        terminal.wait(lambda text: "QUEUE ALPHA" in text and "p pause queue" in text and "r resume queue" in text)
+        terminal.keys(b"\x1b[Br")  # Select ALPHA and resume its queue without Enter.
+        until(lambda: live.status()["state"] == "running")
+        self.assertFalse(self.a.status()["admission_paused"])
+        terminal.keys(b"p")
+        until(lambda: live.status()["state"] == "suspended")
+        self.assertTrue(self.a.status()["admission_paused"])
+        self.assertFalse(self.b.status()["admission_paused"])
+        terminal.keys(b"r")
+        until(lambda: live.status()["state"] == "running")
+        terminal.keys(b"\r")  # Open ALPHA; its live child is sorted first.
+        terminal.wait(lambda text: "LONG CHILD" in text and "p pause child" in text and "r resume child" in text)
+        terminal.keys(b"p")
+        until(lambda: live.status()["state"] == "suspended")
+        self.assertFalse(self.a.status()["admission_paused"], "child pause must not pause its queue")
+        terminal.keys(b"r")
+        until(lambda: live.status()["state"] == "running")
+        terminal.keys(b"\x1b[C\x1b[C")  # Pause/resume also work while viewing this child's logs.
+        terminal.keys(b"p")
+        until(lambda: live.status()["state"] == "suspended")
+        terminal.keys(b"r")
+        until(lambda: live.status()["state"] == "running")
+        live.kill()
 
 
 if __name__ == "__main__":
