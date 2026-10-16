@@ -95,6 +95,7 @@ impl Mps {
                 Command::new("nvidia-cuda-mps-control")
                     .arg("-f")
                     .envs(&mps.env)
+                    .env("CUDA_MPS_ACTIVE_THREAD_PERCENTAGE", "100")
                     .stdin(Stdio::null())
                     .stdout(Stdio::from(log.try_clone()?))
                     .stderr(Stdio::from(log))

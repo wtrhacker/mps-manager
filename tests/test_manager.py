@@ -321,6 +321,48 @@ class ManagerTests(unittest.TestCase):
         c.wait(timeout=8)
         self.assertLess(jc.status()["admission_sequence"], ja.status()["admission_sequence"])
 
+    def test_thread_client_estimate_is_gpu_wide_and_respects_queue_limits(self):
+        a = self.manager(max_concurrent=4, gpu_max_concurrent=16)
+        b = run_mps_scripts(mps=False, detach=True, state_dir=self.root, title="Other parent",
+                            max_concurrent=4, gpu_max_concurrent=16)
+        self.parents.append(b)
+        aa = a.submit_many([{"script_path": FIXTURE, "args": ["--seconds", "20"]} for _ in range(8)])
+        until(lambda: all(j.status()["state"] == "running" for j in aa[:4]))
+        self.assertEqual([j.status()["admission_clients"] for j in aa[:4]], [4]*4)
+        self.assertTrue(all(j.pid is None for j in aa[4:]))
+        for job in aa[4:]:
+            job.remove()
+        bb = b.submit_many([{"script_path": FIXTURE, "args": ["--seconds", "20"]} for _ in range(4)])
+        until(lambda: all(j.status()["state"] == "running" for j in bb))
+        self.assertEqual([j.status()["admission_clients"] for j in bb], [8]*4)
+        c = run_mps_scripts(mps=False, detach=True, state_dir=self.root, title="Other GPU", gpu=1,
+                            max_concurrent=4, gpu_max_concurrent=16)
+        self.parents.append(c)
+        cc = c.submit_many([{"script_path": FIXTURE, "args": ["--seconds", "20"]} for _ in range(4)])
+        until(lambda: all(j.status()["state"] == "running" for j in cc))
+        self.assertEqual([j.status()["admission_clients"] for j in cc], [4]*4,
+                         "another GPU must have its own client count")
+        self.assertEqual([j.status()["admission_clients"] for j in aa[:4]], [4]*4,
+                         "launch settings must not change when another parent adds jobs")
+        self.assertTrue(all(j.status()["active_thread_percentage"] is None for j in aa[:4]+bb),
+                        "ordinary-process mode must not enable MPS settings")
+        for job in aa[:4]+bb+cc:
+            job.kill()
+        a.pause()
+        held = a.submit_many([{"script_path": FIXTURE, "args": ["--seconds", "0.05"]} for _ in range(4)])
+        held[0].pause()
+        a.resume()
+        a.wait(timeout=8)
+        self.assertIsNone(held[0].pid)
+        self.assertEqual([j.status()["admission_clients"] for j in held[1:]], [3]*3)
+
+    def test_thread_client_estimate_obeys_gpu_wide_limit(self):
+        parent = self.manager(max_concurrent=8, gpu_max_concurrent=2)
+        jobs = parent.submit_many([{"script_path": FIXTURE, "args": ["--seconds", "0.1"]} for _ in range(8)])
+        parent.wait(timeout=8)
+        self.assertEqual(jobs[0].status()["admission_clients"], 2)
+        self.assertTrue(all(1 <= job.status()["admission_clients"] <= 2 for job in jobs))
+
 
 if __name__ == "__main__":
     unittest.main()

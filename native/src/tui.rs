@@ -365,7 +365,7 @@ fn render(frame: &mut ratatui::Frame<'_>, parents: &[Parent], view: &View, usage
         } else if let Some(job) = view.job(parent) {
             if view.level == 2 {
                 let content = format!(
-                    "Title: {}\nJob: {}\nPID{}: {}\nStatus: {}\nScript: {}\nArguments: {}\nFixed/common arguments: {}\nResolved parameters: {}\nGPU admission: {}\nWorking directory: {}\nOutput area: {}\nExit code: {}\n{}",
+                    "Title: {}\nJob: {}\nPID{}: {}\nStatus: {}\nScript: {}\nArguments: {}\nFixed/common arguments: {}\nResolved parameters: {}\nGPU admission: {}\nMPS thread ceiling: {}\nClients at launch: {}\nWorking directory: {}\nOutput area: {}\nExit code: {}\n{}",
                     job.title,
                     job.id,
                     if job.state.terminal() {
@@ -382,6 +382,10 @@ fn render(frame: &mut ratatui::Frame<'_>, parents: &[Parent], view: &View, usage
                         .as_ref()
                         .map_or_else(|| "—".into(), |v| v.to_string()),
                     job.admission_sequence
+                        .map_or_else(|| "—".into(), |n| n.to_string()),
+                    job.active_thread_percentage
+                        .map_or_else(|| "—".into(), |p| format!("{p:.2}%")),
+                    job.admission_clients
                         .map_or_else(|| "—".into(), |n| n.to_string()),
                     job.cwd.display(),
                     job.run_dir.display(),

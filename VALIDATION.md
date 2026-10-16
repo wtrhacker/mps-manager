@@ -76,3 +76,19 @@ output folders, and literal arguments containing spaces are checked against real
 child scripts. Existing custom argument functions remain covered by the earlier
 sweep tests. The manager and real PTY suite has 21 passing tests. Unsupported
 automatic value types and conflicting output arguments fail before submission.
+
+## Automatic MPS thread ceilings (0.3.0)
+
+Real CUDA contexts verified the launch default `min(100, 200/N)`: 1 and 2
+clients retain 128 SMs on the test RTX 4090; 3 clients receive 66.67% and see 84
+SMs after hardware rounding; 4 receive 50% and see 64 SMs; 8 receive 25% and see
+32 SMs. Every child also executed and checked its CUDA kernel result.
+
+Tests cover GPU-wide counts across parents, parent/GPU concurrency limits, held
+jobs, launch settings remaining fixed for existing jobs, and explicit environment
+overrides. The actual TUI rendered a 25% ceiling with the GPU-wide count of 8.
+The queue/PTY suite has 23 tests and the native unit suite has 4 tests; both pass,
+along with strict Clippy. These checks verify resource limits, not throughput.
+The installed release wheel repeated the real CUDA ceiling checks. Eight
+fast-process force, chemistry/contact, and extrusion GPU tests also passed as a
+managed client under the automatic 50% ceiling alongside three other clients.

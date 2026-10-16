@@ -403,6 +403,8 @@ def run_mps_scripts(runs=(), *, gpu=0, max_concurrent=4, title=None, state_dir="
     admission between parents and FIFO within each queue. gpu_max_concurrent
     sets the shared service limit (default 64 for the first parent); later
     parents inherit it when omitted. common_args prefixes each child's args.
+    New MPS clients default to min(100, 200 / concurrent_clients) percent,
+    counting eligible work across all parents sharing the GPU at launch.
     mps=False is explicit ordinary-process mode for development and CPU tests;
     providing gpu_max_concurrent enables shared scheduling for CPU tests too.
     """

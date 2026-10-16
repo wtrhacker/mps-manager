@@ -451,6 +451,8 @@ impl Server {
                         submitted_args: spec.args,
                         parameters: spec.parameters,
                         admission_sequence: None,
+                        admission_clients: None,
+                        active_thread_percentage: None,
                         python: spec.python,
                         cwd: spec.cwd,
                         env: spec.env,
@@ -774,10 +776,12 @@ impl Server {
         {
             let id = self.parent.pending[0].clone();
             if let Some(service) = &self.coordinator {
-                let Some(sequence) = service.acquire(&id)? else {
+                let Some(admission) = service.acquire(&id)? else {
                     break;
                 };
-                self.job_mut(&id)?.admission_sequence = Some(sequence);
+                let job = self.job_mut(&id)?;
+                job.admission_sequence = Some(admission.sequence);
+                job.admission_clients = Some(admission.clients);
             }
             self.parent.pending.remove(0);
             if let Err(error) = self.launch(&id) {
@@ -787,6 +791,7 @@ impl Server {
                 job.detail = error.to_string();
                 self.parent
                     .message(format!("{id} failed to launch: {error}; no retry."));
+                self.save()?;
             }
             changed = true;
         }
@@ -798,6 +803,20 @@ impl Server {
 
     fn launch(&mut self, id: &str) -> Result<()> {
         let mut job = self.job_mut(id)?.clone();
+        if self.mps.is_some() {
+            let percentage = match job.env.get("CUDA_MPS_ACTIVE_THREAD_PERCENTAGE") {
+                Some(value) => value.parse::<f64>().map_err(
+                    |_| "CUDA_MPS_ACTIVE_THREAD_PERCENTAGE must be a number from 0 to 100",
+                )?,
+                None => super::shared::thread_percentage(job.admission_clients.unwrap_or(1)),
+            };
+            if !percentage.is_finite() || !(0.0..=100.0).contains(&percentage) {
+                return Err(
+                    "CUDA_MPS_ACTIVE_THREAD_PERCENTAGE must be a number from 0 to 100".into(),
+                );
+            }
+            job.active_thread_percentage = Some(percentage);
+        }
         let directory = job
             .run_dir
             .parent()
@@ -832,6 +851,9 @@ impl Server {
             .process_group(0);
         if let Some(mps) = &self.mps {
             command.envs(mps.environment());
+        }
+        if let Some(percentage) = job.active_thread_percentage {
+            command.env("CUDA_MPS_ACTIVE_THREAD_PERCENTAGE", percentage.to_string());
         }
         let mut process = spawn(&mut command)?;
         let process_pid = process.id();

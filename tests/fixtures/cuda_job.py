@@ -21,6 +21,11 @@ def call(name, *values):
         raise RuntimeError(f"{name}: CUDA error {result}")
 
 
+device, multiprocessors = C.c_int(), C.c_int()
+call("cuCtxGetDevice", C.byref(device))
+call("cuDeviceGetAttribute", C.byref(multiprocessors), C.c_int(16), device)
+
+
 ptx = b"""
 .version 7.0
 .target sm_70
@@ -68,7 +73,9 @@ try:
         time.sleep(0.03)
     if args.fail:
         raise ValueError("deliberate CUDA-script Python failure")
-    (directory / "result.json").write_text(json.dumps({"value": sample.value, "ticks": ticks, "pid": os.getpid()}))
+    (directory / "result.json").write_text(json.dumps({"value": sample.value, "ticks": ticks, "pid": os.getpid(),
+        "multiprocessors": multiprocessors.value,
+        "active_thread_percentage": os.environ.get("CUDA_MPS_ACTIVE_THREAD_PERCENTAGE")}))
     print("completed CUDA work", flush=True)
 finally:
     call("cuMemFree_v2", pointer)

@@ -11,7 +11,7 @@ termination support (`nvidia-smi` and `nvidia-cuda-mps-control` installed).
 The prebuilt wheel supports Linux x86_64 with glibc 2.34+:
 
 ```bash
-python -m pip install https://github.com/wtrhacker/mps-manager/releases/download/v0.2.2/mps_manager-0.2.2-py3-none-linux_x86_64.whl
+python -m pip install https://github.com/wtrhacker/mps-manager/releases/download/v0.3.0/mps_manager-0.3.0-py3-none-linux_x86_64.whl
 ```
 
 Installation provides both the `mps_runner` Python package and the `mps-manager`
@@ -82,6 +82,40 @@ and compute requirements. Each parent's `max_concurrent` also continues to apply
 
 Use the same project directory or `state_dir` to browse both parents together.
 GPU sharing also works between parents whose project folders differ.
+
+## Automatic MPS thread ceilings
+
+By default, every new MPS client automatically receives this thread ceiling:
+
+```text
+min(100, 200 / number_of_concurrent_clients) percent
+```
+
+| Concurrent clients on one GPU | Ceiling per client |
+| --- | --- |
+| 1 | 100% |
+| 2 | 100% |
+| 3 | 66.67% |
+| 4 | 50% |
+| 8 | 25% |
+
+We recommend this default, following NVIDIA's
+[twice-equal-share guidance](https://docs.nvidia.com/deploy/mps/when-to-use-mps.html#dynamic-execution-resource-provisioning)
+to allow overlapping work to use idle resources. No additional setting is needed.
+
+The client count covers **all parents sharing the GPU**, respecting both each
+parent's `max_concurrent` and the shared `gpu_max_concurrent`. For example, 100
+queued jobs with room for four simultaneous clients count as four; two parents
+with four eligible jobs each and room for eight count as eight. Empty queues and
+held jobs do not inflate the count. Suspended clients retain their slots.
+
+Each job's ceiling is chosen at launch. Jobs already running keep their assigned
+ceiling when other jobs arrive or finish. Job details and `job.status()` record
+the chosen percentage and the client count used. NVIDIA may round the available
+hardware resources down. An explicitly supplied `CUDA_MPS_ACTIVE_THREAD_PERCENTAGE`
+in a job's environment remains an override of the automatic default.
+Start new parent queues after upgrading to use this default; already-running
+parent processes retain their previous behavior.
 
 ## Add more jobs
 
@@ -220,6 +254,7 @@ kill command for MPS-aware cancellation.
 To use a compatible externally managed MPS service, supply `mps_pipe_directory`
 when creating a queue. Its parent queues share admission too, and leave the
 external service running. Ordinary same-GPU sharing needs no pipe argument.
+An external service's own thread limits can further constrain client ceilings.
 
 Existing v0.1 parent queues keep their original behavior; close them before
 starting the new automatic shared-service mode. Their saved history remains readable.

@@ -56,6 +56,10 @@ pub(crate) struct Job {
     pub(crate) parameters: Option<serde_json::Value>,
     #[serde(default)]
     pub(crate) admission_sequence: Option<u64>,
+    #[serde(default)]
+    pub(crate) admission_clients: Option<usize>,
+    #[serde(default)]
+    pub(crate) active_thread_percentage: Option<f64>,
     pub(crate) python: PathBuf,
     pub(crate) cwd: PathBuf,
     #[serde(default, skip_serializing)]

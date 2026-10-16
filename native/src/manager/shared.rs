@@ -108,6 +108,46 @@ impl Session {
                 .then_some(member)
         })
     }
+
+    fn expected_clients(&self) -> usize {
+        let mut total = self.slots.len() + self.extra_clients;
+        for member in &self.members {
+            let Some(parent) = member.parent() else {
+                continue;
+            };
+            let stopped = process_identity(member.pid)
+                .is_some_and(|(state, _, _)| state == 'T' || state == 't');
+            if parent.state != "ready" || parent.admission_paused || stopped {
+                continue;
+            }
+            let reserved = self
+                .slots
+                .iter()
+                .filter(|slot| slot.parent == member.id)
+                .count();
+            let pending = parent
+                .pending
+                .iter()
+                .filter(|job| {
+                    !self
+                        .slots
+                        .iter()
+                        .any(|slot| slot.parent == member.id && slot.job == **job)
+                })
+                .count();
+            total += pending.min(parent.max_concurrent.saturating_sub(reserved));
+        }
+        total.min(self.limit).max(1)
+    }
+}
+
+pub(super) struct Admission {
+    pub sequence: u64,
+    pub clients: usize,
+}
+
+pub(super) fn thread_percentage(clients: usize) -> f64 {
+    (200.0 / clients.max(1) as f64).min(100.0)
 }
 
 pub(super) struct Coordinator {
@@ -312,7 +352,7 @@ impl Coordinator {
         self.state().map(|_| ())
     }
 
-    pub fn acquire(&self, job: &str) -> Result<Option<u64>> {
+    pub fn acquire(&self, job: &str) -> Result<Option<Admission>> {
         let _guard = lock(&self.root)?;
         let mut session = self.state()?;
         session.prune();
@@ -341,8 +381,9 @@ impl Coordinator {
         session.last_order = Some(member.order);
         session.sequence += 1;
         let sequence = session.sequence;
+        let clients = session.expected_clients();
         write_json(&session_path(&self.root), &session)?;
-        Ok(Some(sequence))
+        Ok(Some(Admission { sequence, clients }))
     }
 
     pub fn bind(&self, job: &str, pid: u32, start: u64) -> Result<()> {
@@ -458,4 +499,26 @@ pub(super) fn run(root: &Path) -> Result<()> {
         write_json(&session_path(root), &session)?;
     }
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::thread_percentage;
+
+    #[test]
+    fn thread_ceilings_allow_twice_an_equal_share() {
+        for (clients, expected) in [
+            (1, 100.0),
+            (2, 100.0),
+            (3, 200.0 / 3.0),
+            (4, 50.0),
+            (5, 40.0),
+            (6, 200.0 / 6.0),
+            (8, 25.0),
+            (16, 12.5),
+            (64, 3.125),
+        ] {
+            assert!((thread_percentage(clients) - expected).abs() < 1e-10);
+        }
+    }
 }
